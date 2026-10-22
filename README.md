@@ -4,8 +4,6 @@ CMPE 272 Final Project
 
 An event-driven healthcare messaging platform that redacts protected health information (PHI) from patient portal messages, then uses five locally hosted AI microservices to flag urgency, route each message to the right team, summarize it, and surface similar past messages for clinicians.
 
-> **Educational demonstration only.** All patient data is synthetic. Urgency flags are demo-only review aids, not validated clinical triage.
-
 ![Clinician inbox](screenshots/doctor_pov.png)
 
 ## Highlights
