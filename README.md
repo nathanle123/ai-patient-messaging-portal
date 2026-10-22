@@ -17,13 +17,25 @@ An event-driven healthcare messaging platform that redacts protected health info
 
 ## Screenshots
 
-| Patient portal | Clinician inbox |
-|---|---|
-| ![Patient portal](screenshots/patient_pov.png) | ![Clinician inbox](screenshots/doctor_pov.png) |
+### Patient Portal
+Patients submit messages through a simple portal form.
 
-| Analytics dashboard | Analytics dashboard (detail) |
-|---|---|
-| ![Analytics dashboard](screenshots/analytics.png) | ![Analytics dashboard detail](screenshots/analytics_2.png) |
+![Patient portal](screenshots/patient_pov.png)
+
+### Clinician Inbox
+Messages are sorted by urgency, with each message's AI summary, routing category, and similar past messages alongside it.
+
+![Clinician inbox](screenshots/doctor_pov.png)
+
+### Analytics Dashboard: Operations
+Live and historical message volume by category and urgency, plus unreviewed urgent messages.
+
+![Analytics dashboard](screenshots/analytics.png)
+
+### Analytics Dashboard: Service Health
+Per-service latency, throughput, errors, consumer lag, and dead-letter queue depth.
+
+![Analytics dashboard detail](screenshots/analytics_2.png)
 
 ## Architecture
 
@@ -63,7 +75,7 @@ flowchart LR
 | Summarization | Extractive, using MiniLM sentence embeddings | ~57 ms |
 | Similarity search | MiniLM embeddings + pgvector | ~40 ms |
 
-Routing reached **93/100 accuracy** on a labeled synthetic test set. The similarity threshold (0.52) was tuned from the data and reaches 97% precision.
+Routing reached **93/100 accuracy** on a labeled synthetic test set. The similarity threshold (0.52) was tuned from the data and 97% of suggested similar messages share the message’s category.
 
 ## Tech Stack
 
@@ -108,7 +120,10 @@ Open http://localhost:3000 and sign in as `admin`, `dr.alvarez`, or `maria.lopez
 
 ## Data and Attribution
 
-Patient messages come from the [PortalPal-AI](https://huggingface.co/PortalPal-AI) datasets by the Persist Lab at Dartmouth College (CC BY-NC 4.0), supplemented by clearly labeled synthetic messages. Fake identities use reserved phone ranges and `example.com` addresses. No real patient data is used.
+Patient messages come from two PortalPal-AI datasets (CC BY-NC 4.0), supplemented by clearly labeled synthetic messages. Fake identities use reserved phone ranges and `example.com` addresses. No real patient data is used.
+
+- [PortalPal-AI/Followup-Q](https://huggingface.co/datasets/PortalPal-AI/Followup-Q): Gatto et al., *Follow-up Question Generation For Enhanced Patient-Provider Conversations*, [arXiv:2503.17509](https://arxiv.org/abs/2503.17509).
+- [PortalPal-AI/Patient-Message-Response-Drafting](https://huggingface.co/datasets/PortalPal-AI/Patient-Message-Response-Drafting): Seegmiller et al., *How Much Would a Clinician Edit This Draft? Evaluating LLM Alignment for Patient Message Response Drafting*, [arXiv:2601.11344](https://arxiv.org/abs/2601.11344).
 
 ## License
 
