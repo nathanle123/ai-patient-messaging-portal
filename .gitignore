@@ -37,7 +37,6 @@ __pycache__/
 /ai-services/README.md
 /fhir-mock/README.md
 /load-tests/
-/screenshots/
 /scripts/benchmark_routing.py
 /scripts/routing_thread_sweep.py
 /scripts/tune_similarity_threshold.py
