@@ -1,0 +1,14 @@
+# Same pins as ai-services/requirements (base.txt + constraints.txt), so the stacks stay in step.
+fastapi==0.119.1
+uvicorn==0.38.0
+pydantic==2.12.5
+pydantic_core==2.41.5
+starlette==0.48.0
+anyio==4.15.1
+annotated-doc==0.0.5
+annotated-types==0.8.0
+click==8.5.0
+h11==0.16.0
+idna==3.20
+typing-inspection==0.4.4
+typing_extensions==4.16.0

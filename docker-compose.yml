@@ -1,0 +1,191 @@
+# postgres, Kafka (KRaft), platform, frontend, the five AI services, and the mock FHIR R4 server.
+# Every long-running container has a health check; kafka-init is a one-shot job that the services
+# wait on with condition: service_completed_successfully.
+name: portal
+
+x-ai-service: &ai-service
+  restart: unless-stopped
+  # Health check (GET /health) and offline model settings come from ai-services/Dockerfile.
+  environment: &ai-env
+    KAFKA_BOOTSTRAP: kafka:9092
+  depends_on: &ai-depends
+    kafka-init:
+      condition: service_completed_successfully
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.1-pg16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-portal}
+      POSTGRES_USER: ${POSTGRES_USER:-portal}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (see .env.example)}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    mem_limit: 512m
+    restart: unless-stopped
+
+  kafka:
+    image: apache/kafka:3.9.1
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # Topics are created explicitly by kafka-init (3 partitions each).
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_HEAP_OPTS: -Xms512m -Xmx512m
+    volumes:
+      - kafkadata:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      start_period: 20s
+      retries: 10
+    mem_limit: 1024m
+    restart: unless-stopped
+
+  kafka-init:
+    image: apache/kafka:3.9.1
+    entrypoint: ["/bin/bash", "/create-topics.sh"]
+    volumes:
+      - ./infra/kafka/create-topics.sh:/create-topics.sh:ro
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: "no"
+
+  platform:
+    build: ./platform
+    image: portal/platform:0.5.0
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-portal}
+      DB_USER: ${POSTGRES_USER:-portal}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env (at least 32 bytes)}
+      JWT_TTL: ${JWT_TTL:-60m}
+      SEED_DEMO_USERS: ${SEED_DEMO_USERS:-true}
+      DEMO_USER_PASSWORD: ${DEMO_USER_PASSWORD:?Set DEMO_USER_PASSWORD in .env}
+      FAKE_PHI_PATH: /app/seed/fake_phi.csv
+      SEARCH_DB_PASSWORD: ${SEARCH_DB_PASSWORD:?Set SEARCH_DB_PASSWORD in .env (hex, see .env.example)}
+      KAFKA_BOOTSTRAP: kafka:9092
+      PHI_SERVICE_URL: http://phi-detection:8000
+      URGENCY_SERVICE_URL: http://urgency:8000
+      ROUTING_SERVICE_URL: http://routing:8000
+      SUMMARIZATION_SERVICE_URL: http://summarization:8000
+      SEARCH_SERVICE_URL: http://similarity-search:8000
+      SIMILARITY_THRESHOLD: ${SIMILARITY_THRESHOLD:-0.52}
+      FHIR_BASE_URL: http://fhir-mock:8000/fhir
+      FHIR_HEALTH_URL: http://fhir-mock:8000
+      # Demo seeding endpoint (source tags + backdated submissions). Turn off for a non-demo run.
+      DEMO_MODE: ${DEMO_MODE:-true}
+    volumes:
+      - ./fake_phi.csv:/app/seed/fake_phi.csv:ro
+    ports:
+      - "127.0.0.1:${PLATFORM_HOST_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      phi-detection:
+        condition: service_healthy
+      # Not a hard dependency at runtime (intake continues and write-back retries if FHIR is down),
+      # but starting it first means the first messages are linked to their Patient on intake.
+      fhir-mock:
+        condition: service_healthy
+    # Health check is defined in platform/Dockerfile (actuator readiness probe).
+    mem_limit: 768m
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    image: portal/frontend:0.5.0
+    ports:
+      - "127.0.0.1:${FRONTEND_HOST_PORT:-3000}:80"
+    depends_on:
+      platform:
+        condition: service_healthy
+    mem_limit: 64m
+    restart: unless-stopped
+
+  fhir-mock:
+    # Minimal FHIR R4 server: Patients built in memory from fake_phi.csv, Communications in memory.
+    # Health check is defined in fhir-mock/Dockerfile.
+    build: ./fhir-mock
+    image: portal/fhir-mock:0.5.0
+    volumes:
+      - ./fake_phi.csv:/app/seed/fake_phi.csv:ro
+    ports: ["127.0.0.1:8006:8000"]
+    mem_limit: 128m
+    restart: unless-stopped
+
+  # ---------- AI services (Swagger UI at http://localhost:800N/docs) ----------
+  phi-detection:
+    # Called synchronously over HTTP by the platform's intake; it never touches Kafka.
+    restart: unless-stopped
+    build: { context: ./ai-services, target: phi-detection }
+    image: portal/phi-detection:0.3.0
+    ports: ["127.0.0.1:8001:8000"]
+    mem_limit: 1536m
+
+  urgency:
+    <<: *ai-service
+    build: { context: ./ai-services, target: urgency }
+    image: portal/urgency:0.3.0
+    ports: ["127.0.0.1:8002:8000"]
+    mem_limit: 512m
+
+  routing:
+    <<: *ai-service
+    build: { context: ./ai-services, target: routing }
+    image: portal/routing:0.4.0
+    environment:
+      <<: *ai-env
+      # Each replica uses min(TORCH_THREADS_CAP, vCPUs / ROUTING_REPLICAS) torch threads. Scale with:
+      #   ROUTING_REPLICAS=3 docker compose up -d --force-recreate --scale routing=3 routing
+      ROUTING_REPLICAS: ${ROUTING_REPLICAS:-1}
+      TORCH_THREADS_CAP: ${TORCH_THREADS_CAP:-2}
+    # A port range so the scalability demo can scale to 3 replicas.
+    ports: ["127.0.0.1:8010-8012:8000"]
+    mem_limit: 2048m
+
+  summarization:
+    <<: *ai-service
+    build: { context: ./ai-services, target: summarization }
+    image: portal/summarization:0.3.0
+    ports: ["127.0.0.1:8004:8000"]
+    mem_limit: 1024m
+
+  similarity-search:
+    <<: *ai-service
+    build: { context: ./ai-services, target: similarity-search }
+    image: portal/similarity-search:0.3.0
+    environment:
+      <<: *ai-env
+      SEARCH_DB_DSN: postgresql://search_svc:${SEARCH_DB_PASSWORD}@postgres:5432/${POSTGRES_DB:-portal}
+    ports: ["127.0.0.1:8005:8000"]
+    depends_on:
+      <<: *ai-depends
+      # The platform's Flyway migrations create the search_svc role and the message_embedding table.
+      platform:
+        condition: service_healthy
+    mem_limit: 1024m
+
+volumes:
+  pgdata:
+  kafkadata:

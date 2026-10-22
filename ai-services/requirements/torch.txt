@@ -1,0 +1,2 @@
+# Installed from the PyTorch CPU index (no CUDA libraries; native linux/arm64 wheel).
+torch==2.9.1+cpu

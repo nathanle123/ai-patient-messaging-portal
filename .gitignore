@@ -1,0 +1,45 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Dataset files: never committed (they contain dataset text and EHR fields)
+/portal_pal/
+/portal_pal_followup/
+/john_hopkins/
+/pmr_bench/
+/data/raw/
+*.parquet
+/data/**/*.csv
+/data/**/*.jsonl
+
+# Build output
+platform/target/
+frontend/node_modules/
+frontend/dist/
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.iml
+
+# Load-test scratch output (metrics only; the committed results are load-tests/results/*.json)
+/load-tests/results/k6/
+
+# Local documentation and optional development artifacts
+/docs/
+/data/README.md
+/ai-services/README.md
+/fhir-mock/README.md
+/load-tests/
+/screenshots/
+/scripts/benchmark_routing.py
+/scripts/routing_thread_sweep.py
+/scripts/tune_similarity_threshold.py
+/scripts/seed_demo.py
+/scripts/synthetic_messages.py

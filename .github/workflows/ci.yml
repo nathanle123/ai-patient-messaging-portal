@@ -1,0 +1,136 @@
+# CI: unit tests for every component with AI models mocked, Testcontainers integration tests for
+# the platform, and build validation for every image. Model-dependent tests (real Presidio/spaCy/
+# DeBERTa/MiniLM, baked into the images) and the full Docker Compose e2e and load tests stay local:
+# they need the multi-GB model images (see README "Running tests").
+#
+# Actions are pinned to full commit SHAs (tag in the comment).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  platform:
+    name: Platform (JUnit + Testcontainers)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: platform
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "21.0.8"
+          cache: maven
+      - name: Unit tests
+        run: mvn -B -ntp test
+      # Postgres + pgvector, Kafka (KRaft) and the FHIR mock in containers; PHI service stubbed,
+      # AI workers simulated by the test.
+      - name: Integration tests (Testcontainers)
+        run: mvn -B -ntp verify -DskipUTs=true
+      - name: Test reports
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: platform-test-reports
+          path: |
+            platform/target/surefire-reports
+            platform/target/failsafe-reports
+
+  ai-services:
+    name: AI services (pytest, models mocked)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: ai-services
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11.13"
+          cache: pip
+          cache-dependency-path: ai-services/requirements/*.txt
+      # No torch, transformers or spaCy models: every model is stubbed in the unit tests, and heavy
+      # imports are lazy. Presidio + spaCy (library only) are needed for the PHI recognizers.
+      - name: Install
+        run: pip install -c requirements/constraints.txt -r requirements/base.txt -r requirements/test.txt -r requirements/phi.txt
+      - name: Unit tests
+        run: pytest -p no:cacheprovider
+
+  fhir-mock:
+    name: FHIR mock (pytest)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: fhir-mock
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11.13"
+          cache: pip
+          cache-dependency-path: fhir-mock/requirements*.txt
+      - run: pip install -r requirements.txt -r requirements-test.txt
+      - run: pytest
+
+  frontend:
+    name: Frontend (vitest + build)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.20.0"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+  images:
+    name: Build validation (Compose + images)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Compose file is valid
+        run: |
+          # Throwaway values only so variable interpolation succeeds; nothing is started.
+          sed -e 's/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=ci/' -e 's/^SEARCH_DB_PASSWORD=.*/SEARCH_DB_PASSWORD=00ff/' \
+              -e 's/^JWT_SECRET=.*/JWT_SECRET=ci-only-secret-that-is-at-least-32-bytes/' \
+              -e 's/^DEMO_USER_PASSWORD=.*/DEMO_USER_PASSWORD=ci-only/' .env.example > .env
+          docker compose config --quiet
+      - name: Lint Dockerfiles
+        run: |
+          for f in platform frontend fhir-mock ai-services; do docker buildx build --check "$f"; done
+      - name: Build platform, frontend and FHIR mock images
+        run: |
+          docker buildx build --load -t portal/platform:ci platform
+          docker buildx build --load -t portal/frontend:ci frontend
+          docker buildx build --load -t portal/fhir-mock:ci fhir-mock
+      # The model-bearing targets (phi-detection, urgency, routing, summarization, similarity-search)
+      # download ~2 GB of pinned models and are built locally. Here the dependency stages are built,
+      # which proves the pinned constraints resolve and install on a clean amd64 machine.
+      - name: Build AI dependency stages (no models)
+        run: |
+          docker buildx build --target spacy-base ai-services
+          docker buildx build --target ml-base ai-services

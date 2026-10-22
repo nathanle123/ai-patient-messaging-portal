@@ -1,0 +1,5 @@
+# Shared by every AI service.
+fastapi==0.119.1
+uvicorn==0.38.0
+pydantic==2.12.5
+numpy==2.3.5
